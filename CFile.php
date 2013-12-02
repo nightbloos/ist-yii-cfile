@@ -300,10 +300,13 @@ class CFile extends CApplicationComponent {
 
         // Windows OS path type detection
         if (!strncasecmp(PHP_OS, 'win', 3)) {
+			$tempCurrentPath = $current_path;
             $current_path = preg_replace('/[\\\\\/]/', $dir_separator, $current_path);
             if (preg_match('/([a-zA-Z]\:)(.*)/', $current_path, $matches)) {
                 $win_drive = $matches[1];
                 $current_path = $matches[2];
+			} elseif (preg_match('#//#', $tempCurrentPath)) {
+				$current_path = $tempCurrentPath;
             } else {
                 $workingDir = getcwd();
                 $win_drive = substr($workingDir, 0, 2);
@@ -326,9 +329,12 @@ class CFile extends CApplicationComponent {
             }
         }
 
-        $realpath = $win_drive . $dir_separator . implode($dir_separator, $paths);
-
-        if ($current_path!=$supplied_path) {
+        if (!preg_match('#//#', $current_path))
+			$realpath = $win_drive . $dir_separator . implode($dir_separator, $paths);
+		else
+			$realpath = $current_path;
+        
+		if ($current_path!=$supplied_path) {
             $this->addLog('Path "' . $supplied_path . '" resolved into "' . $realpath . '"', 'trace');
         }
 
@@ -1084,17 +1090,57 @@ class CFile extends CApplicationComponent {
 
         return $this->realPath($dest);
     }
-
+	
+	/**
+     * Extension for method copy()
+     * Check if file or directory exists, and create new unique name
+     *
+     * Example(if copy dupe of file don't exist) 	IN: example.txt 	OUT: example copy(1).txt	 
+     * Example(if copy dupe of file exist) 			IN: example.txt 	OUT: example copy(2).txt	 
+     *	 
+     * @param string $destPath Destination path for the current filesystem object to be copied to
+     * @return string with unique name.
+     */
+	private function createDupe($destPath) {
+		$destObj = $this->set($destPath);
+		$itemList = $destObj->contents;
+		$objFind = $this->set($destObj->realpath . '/' . $this->basename);
+		if ($objFind->exists) {
+			if ($objFind->isfile) {
+				$finish = ($objFind->extension != NULL) ? '.' . $objFind->extension : '';
+				$start = ($objFind->filename != '') ? $objFind->filename : $objFind->basename;
+			} elseif ($objFind->isdir) {
+				$start = $objFind->basename;
+			}
+			$maxVal = 0;
+			foreach ($itemList as $item) {
+				$fobj = $this->set($item);
+				$regexStr = '(?<=' . preg_quote($start, '/') . ' copy\()([\d]*?)(?=\)' . (($objFind->isfile) ? preg_quote($finish, '/') : '') . ')';
+				preg_match('#' . $regexStr . '#isu', $fobj->basename, $result);
+				if (count($result) != 0)
+					$maxVal = ($maxVal > $result[0]) ? $maxVal : $result[0];
+			}
+			$finalName = $start . ' copy(' . ($maxVal + 1) . ')' . (($objFind->isfile) ? $finish : '');
+		} else {
+			$finalName = $this->basename;
+		}
+		$finObj = $this->set($destObj->realpath . '/' . $finalName);
+		
+		return $finObj->realPath;
+	}
     /**
      * Copies the current filesystem object to specified destination.
      * Destination path supplied by user resolved to real destination path with {@link resolveDestPath}
      *
      * @param string $dest Destination path for the current filesystem object to be copied to
+     * @param bool $dupe If True - create dupe of file/directory.
      * @return CFile|bool New CFile object for newly created filesystem object on success, 'False' on fail.
      */
-    public function copy($dest) {
+    public function copy($dest, $dupe = false) {
         $dest_realpath = $this->resolveDestPath($dest);
-
+		if ($dupe) {
+			$dest_realpath = $this->createDupe(dirname($dest_realpath));
+			}
         if ($this->getIsFile()) {
             if ($this->getReadable() && @copy($this->_realpath, $dest_realpath)) {
                 return $this->set($dest_realpath);
